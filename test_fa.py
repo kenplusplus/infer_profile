@@ -12,13 +12,21 @@ def test_flash_attention_performance(args):
     Args:
         args: Parsed command-line arguments containing test configuration
     """
-    # Initialize SGLang Engine with Flash Attention (fa3)
-    print(f"Loading model: {args.model_path} (Flash Attention enabled)")
+    # Validate attention backend value
+    valid_backends = ["flashinfer", "fa3", "fa4", "triton", "trtllm_mla", "cutlass_mla"]
+    if args.attention_backend is not None and args.attention_backend not in valid_backends:
+        raise ValueError(f"Invalid attention backend: {args.attention_backend}. Valid options are: {valid_backends}")
+
+    # Set attention backend status
+    attention_backend = args.attention_backend
+    fa_status = attention_backend if attention_backend else "disabled"
+    print(f"Loading model: {args.model_path} (Attention backend: {fa_status})")
+
     engine = Engine(
         model_path=args.model_path,
         tp_size=1,
         trust_remote_code=True,
-        attention_backend="fa3",
+        attention_backend=attention_backend,  # Use specified backend or None to disable
         dtype="auto",
         quantization=None,
         kv_cache_dtype="auto",
@@ -47,6 +55,7 @@ def test_flash_attention_performance(args):
     print(f"  Single prompt token length: {input_seq_len}")
     print(f"  Batch size: {args.batch_size}")
     print(f"  Max new tokens per sample: {args.max_new_tokens}")
+    print(f"  Attention backend: {fa_status}")
     print(f"  Warm-up runs: {args.warmup_runs} | Test runs: {args.test_runs}")
 
     # Sampling parameters for generation
@@ -91,7 +100,7 @@ def test_flash_attention_performance(args):
     avg_time = total_time / args.test_runs
     avg_throughput = total_tokens / total_time
 
-    print(f"\n===== Flash Attention Performance Summary =====")
+    print(f"\n===== Attention Backend ({fa_status}) Performance Summary =====")
     print(f"Average run time: {avg_time:.4f} seconds")
     print(f"Average throughput: {avg_throughput:.2f} tokens/second")
     print(f"Total generated tokens: {total_tokens:,}")
@@ -114,7 +123,16 @@ def parse_arguments():
         "--model_path",
         type=str,
         default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Path/name of pre-trained model (must support Flash Attention)"
+        help="Path/name of pre-trained model (must support specified attention backend)"
+    )
+
+    # Attention backend configuration (replace original enable_flash_attention)
+    parser.add_argument(
+        "--attention_backend",
+        type=str,
+        default="flashinfer",
+        choices=["flashinfer", "fa3", "fa4", "triton", "trtllm_mla", "cutlass_mla", None],
+        help="Specify attention backend to use (default: None/disabled). Valid options: flashinfer, fa3, fa4, triton, trtllm_mla, cutlass_mla"
     )
 
     # Test prompt configuration

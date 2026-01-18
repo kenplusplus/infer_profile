@@ -28,13 +28,13 @@ async def test_flash_attention_performance_async(args):
     Args:
         args: Parsed command-line arguments containing test configuration
     """
-    # Initialize SGLang Engine with Flash Attention (fa3)
-    print(f"Loading model: {args.model_path} (Flash Attention enabled | Async Generation)")
+    # Initialize SGLang Engine with specified Attention backend
+    print(f"Loading model: {args.model_path} (Attention backend: {args.attention_backend} | Async Generation)")
     engine = Engine(
         model_path=args.model_path,
         tp_size=1,
         trust_remote_code=True,
-        attention_backend="fa3",
+        attention_backend=args.attention_backend,
         dtype="auto",
         quantization=None,
         kv_cache_dtype="auto",
@@ -63,6 +63,7 @@ async def test_flash_attention_performance_async(args):
     print(f"  Single prompt token length: {input_seq_len}")
     print(f"  Batch size: {args.batch_size}")
     print(f"  Max new tokens per sample: {args.max_new_tokens}")
+    print(f"  Attention backend: {args.attention_backend}")
     print(f"  Warm-up runs: {args.warmup_runs} | Test runs: {args.test_runs}")
 
     # Sampling parameters for generation
@@ -107,7 +108,7 @@ async def test_flash_attention_performance_async(args):
     avg_time = total_time / args.test_runs
     avg_throughput = total_tokens / total_time
 
-    print(f"\n===== Async Flash Attention Performance Summary =====")
+    print(f"\n===== Async {args.attention_backend} Attention Performance Summary =====")
     print(f"Average run time: {avg_time:.4f} seconds")
     print(f"Average throughput: {avg_throughput:.2f} tokens/second")
     print(f"Total generated tokens: {total_tokens:,}")
@@ -130,7 +131,16 @@ def parse_arguments():
         "--model_path",
         type=str,
         default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="Path/name of pre-trained model (must support Flash Attention)"
+        help="Path/name of pre-trained model (must support specified Attention backend)"
+    )
+
+    # Attention backend configuration
+    parser.add_argument(
+        "--attention_backend",
+        type=str,
+        default="flashinfer",
+        choices=["flashinfer", "fa3", "fa4", "triton", "trtllm_mla", "cutlass_mla"],
+        help="Specify attention backend to use (flashinfer/fa3/fa4/triton/trtllm_mla/cutlass_mla)"
     )
 
     # Test prompt configuration
