@@ -1,0 +1,179 @@
+import time
+import asyncio
+import torch
+import argparse
+from sglang import Engine
+from transformers import AutoTokenizer
+
+
+async def async_generate(engine, prompts, sampling_params):
+    """
+    Asynchronous wrapper for SGLang Engine generation (non-blocking).
+
+    Args:
+        engine: Initialized SGLang Engine instance
+        prompts: List of batched prompts for generation
+        sampling_params: Dictionary of generation sampling parameters
+
+    Returns:
+        Generation results from the engine
+    """
+    return await engine.async_generate(prompts, sampling_params=sampling_params)
+
+
+async def test_flash_attention_performance_async(args):
+    """
+    Asynchronously evaluate Flash Attention performance using sglang.Engine for text generation.
+
+    Args:
+        args: Parsed command-line arguments containing test configuration
+    """
+    # Initialize SGLang Engine with Flash Attention (fa3)
+    print(f"Loading model: {args.model_path} (Flash Attention enabled | Async Generation)")
+    engine = Engine(
+        model_path=args.model_path,
+        tp_size=1,
+        trust_remote_code=True,
+        attention_backend="fa3",
+        dtype="auto",
+        quantization=None,
+        kv_cache_dtype="auto",
+    )
+    print("Model loaded successfully")
+
+    # Initialize tokenizer (set pad token if missing)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+    tokenizer.pad_token = tokenizer.pad_token or tokenizer.eos_token
+
+    # Prepare batched prompts
+    if not args.prompt_text:
+        # Default long prompt to stress test attention computation
+        args.prompt_text = (
+            "Please detailedly describe the development history, core technological breakthroughs, "
+            "and future application prospects of artificial intelligence in the field of natural language processing. "
+            * 5
+        )
+
+    prompts = [args.prompt_text for _ in range(args.batch_size)]
+
+    # Validate input sequence length
+    input_tokens = tokenizer(args.prompt_text, return_tensors="pt")
+    input_seq_len = input_tokens.input_ids.shape[1]
+    print(f"\nTest Configuration:")
+    print(f"  Single prompt token length: {input_seq_len}")
+    print(f"  Batch size: {args.batch_size}")
+    print(f"  Max new tokens per sample: {args.max_new_tokens}")
+    print(f"  Warm-up runs: {args.warmup_runs} | Test runs: {args.test_runs}")
+
+    # Sampling parameters for generation
+    sampling_params = {
+        "max_new_tokens": args.max_new_tokens,
+        "temperature": 0.7,
+        "top_p": 0.95,
+    }
+
+    # Asynchronous Warm-up phase (eliminate initialization/CUDA cache interference)
+    print(f"\nStarting asynchronous warm-up runs ({args.warmup_runs} runs)...")
+    for _ in range(args.warmup_runs):
+        await async_generate(engine, prompts, sampling_params)
+    torch.cuda.synchronize()
+    print("Warm-up completed")
+
+    # Asynchronous Formal performance testing
+    print(f"\nStarting asynchronous performance testing ({args.test_runs} runs)...")
+    total_time = 0.0
+    total_tokens = 0.0
+
+    for run_idx in range(args.test_runs):
+        # Measure async inference time with CUDA synchronization (for accurate timing)
+        start_time = time.perf_counter()
+        await async_generate(engine, prompts, sampling_params)
+        torch.cuda.synchronize()
+        end_time = time.perf_counter()
+
+        # Calculate run metrics
+        run_time = end_time - start_time
+        run_tokens = args.batch_size * args.max_new_tokens
+
+        # Accumulate totals
+        total_time += run_time
+        total_tokens += run_tokens
+
+        # Print per-run results
+        throughput = run_tokens / run_time
+        print(f"  Run {run_idx+1}/{args.test_runs}: {run_time:.4f}s | Throughput: {throughput:.2f} tokens/s")
+
+    # Calculate and print summary metrics
+    avg_time = total_time / args.test_runs
+    avg_throughput = total_tokens / total_time
+
+    print(f"\n===== Async Flash Attention Performance Summary =====")
+    print(f"Average run time: {avg_time:.4f} seconds")
+    print(f"Average throughput: {avg_throughput:.2f} tokens/second")
+    print(f"Total generated tokens: {total_tokens:,}")
+
+    # Clean up resources
+    del engine
+    torch.cuda.empty_cache()
+    print("\nTest completed | Resources cleaned up")
+
+
+def parse_arguments():
+    """Parse command-line arguments for asynchronous performance testing"""
+    parser = argparse.ArgumentParser(
+        description="Asynchronous Flash Attention Performance Test for LLMs using SGLang",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+
+    # Core model configuration
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default="Qwen/Qwen2.5-0.5B-Instruct",
+        help="Path/name of pre-trained model (must support Flash Attention)"
+    )
+
+    # Test prompt configuration
+    parser.add_argument(
+        "--prompt_text",
+        type=str,
+        default=None,
+        help="Custom test prompt text (default: long NLP AI prompt)"
+    )
+
+    # Batch and generation settings
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=4,
+        help="Inference batch size"
+    )
+    parser.add_argument(
+        "--max_new_tokens",
+        type=int,
+        default=128,
+        help="Maximum new tokens generated per sample"
+    )
+
+    # Test execution settings
+    parser.add_argument(
+        "--warmup_runs",
+        type=int,
+        default=3,
+        help="Number of warm-up runs to eliminate initialization overhead"
+    )
+    parser.add_argument(
+        "--test_runs",
+        type=int,
+        default=10,
+        help="Number of formal test runs for performance averaging"
+    )
+
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    # Parse command-line arguments and run async test
+    args = parse_arguments()
+    # Run the asynchronous main function via asyncio event loop
+    asyncio.run(test_flash_attention_performance_async(args))
