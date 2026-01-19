@@ -24,12 +24,15 @@ def test_flash_attention_performance(args):
 
     engine = Engine(
         model_path=args.model_path,
-        tp_size=1,
+        tp_size=4,
+        mem_fraction_static=0.75,
         trust_remote_code=True,
         attention_backend=attention_backend,  # Use specified backend or None to disable
-        dtype="auto",
-        quantization=None,
-        kv_cache_dtype="auto",
+        chunked_prefill_size=-1,
+        disable_radix_cache=True,
+        disable_cuda_graph=True,
+        disable_overlap_schedule=True,
+        cuda_graph_max_bs=128,
     )
     print("Model loaded successfully")
 
@@ -122,7 +125,7 @@ def parse_arguments():
     parser.add_argument(
         "--model_path",
         type=str,
-        default="Qwen/Qwen2.5-0.5B-Instruct",
+        default="/mnt/si001226c4pl/default/triton_models/Qwen3-8B/",
         help="Path/name of pre-trained model (must support specified attention backend)"
     )
 
@@ -130,7 +133,7 @@ def parse_arguments():
     parser.add_argument(
         "--attention_backend",
         type=str,
-        default="flashinfer",
+        default="fa3",
         choices=["flashinfer", "fa3", "fa4", "triton", "trtllm_mla", "cutlass_mla", None],
         help="Specify attention backend to use (default: None/disabled). Valid options: flashinfer, fa3, fa4, triton, trtllm_mla, cutlass_mla"
     )
