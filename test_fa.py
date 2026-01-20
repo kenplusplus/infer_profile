@@ -233,20 +233,20 @@ def parse_arguments():
     # Optimization parameters configuration
     parser.add_argument(
         "--disable_radix_cache",
-        type=bool,
-        default=None,
+        action='store_true',
+        default=False,
         help="Whether to disable radix cache (MUSA environment default: True, other environments default: False)"
     )
     parser.add_argument(
         "--disable_cuda_graph",
-        type=bool,
-        default=None,
+        action='store_true',
+        default=False,
         help="Whether to disable CUDA Graph optimization (MUSA environment default: True, other environments default: False)"
     )
     parser.add_argument(
         "--disable_overlap_schedule",
-        type=bool,
-        default=None,
+        action='store_true',
+        default=False,
         help="Whether to disable CPU-GPU overlap scheduling (MUSA environment default: True, other environments default: False)"
     )
     parser.add_argument(
