@@ -1,3 +1,4 @@
+import os
 import time
 import torch
 import argparse
@@ -107,12 +108,20 @@ def test_offline_infer_perf(args):
     total_time = 0.0
     total_tokens = 0.0
 
+    profiler_dir = os.environ.get('SGLANG_TORCH_PROFILER_DIR')
+
     for run_idx in range(args.test_runs):
         # Measure inference time with CUDA synchronization to ensure accuracy
+        if profiler_dir is not None:
+            engine.start_profile()
+
         start_time = time.perf_counter()
         engine.generate(prompts, sampling_params=sampling_params)
         torch.cuda.synchronize()
         end_time = time.perf_counter()
+
+        if profiler_dir is not None:
+            engine.stop_profile()
 
         # Calculate metrics for the current run
         run_time = end_time - start_time
@@ -251,7 +260,7 @@ def parse_arguments():
     parser.add_argument(
         "--cuda_graph_max_bs",
         type=int,
-        default=None,
+        default=128,
         help="Maximum batch size supported by CUDA Graph (MUSA environment default: 128, other environments default: None)"
     )
 
