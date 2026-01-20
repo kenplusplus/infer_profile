@@ -8,7 +8,7 @@ def is_musa():
     """Check if the current environment supports MUSA (Moore Threads Architecture)."""
     return hasattr(torch, "musa") and torch.musa.is_available()
 
-def test_flash_attention_performance(args):
+def test_offline_infer_perf(args):
     """
     Evaluate Flash Attention performance using sglang.Engine for text generation.
 
@@ -25,17 +25,16 @@ def test_flash_attention_performance(args):
     fa_status = attention_backend if attention_backend else "disabled"
     print(f"Loading model: {args.model_path} (Attention backend: {fa_status})")
 
-    # Initialize configuration from command-line arguments, with higher priority for MUSA environment defaults
-    if is_musa():
-        disable_radix_cache = args.disable_radix_cache if args.disable_radix_cache is not None else True
-        disable_cuda_graph = args.disable_cuda_graph if args.disable_cuda_graph is not None else True
-        disable_overlap_schedule = args.disable_overlap_schedule if args.disable_overlap_schedule is not None else True
-        cuda_graph_max_bs = args.cuda_graph_max_bs if args.cuda_graph_max_bs is not None else 128
-    else:
-        disable_radix_cache = args.disable_radix_cache
-        disable_cuda_graph = args.disable_cuda_graph
-        disable_overlap_schedule = args.disable_overlap_schedule
-        cuda_graph_max_bs = args.cuda_graph_max_bs
+    disable_radix_cache = args.disable_radix_cache
+    disable_cuda_graph = args.disable_cuda_graph
+    disable_overlap_schedule = args.disable_overlap_schedule
+    cuda_graph_max_bs = args.cuda_graph_max_bs
+
+    # # Initialize configuration from command-line arguments, with higher priority for MUSA environment defaults
+    # if is_musa():
+    #     if not disable_overlap_schedule:
+    #         print("Please set disable_overlap_schedule -> True for MUSA")
+    #         disable_overlap_schedule = True
 
     # Extract parameters passed from command line
     tp_size = args.tp_size
@@ -262,4 +261,4 @@ def parse_arguments():
 if __name__ == "__main__":
     # Parse command-line arguments and execute the performance test
     args = parse_arguments()
-    test_flash_attention_performance(args)
+    test_offline_infer_perf(args)
