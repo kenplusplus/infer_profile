@@ -10,13 +10,13 @@ from sglang.srt.server_args import PortArgs, ServerArgs
 
 # ===================== 全局配置 =====================
 # 模型路径（请根据你的实际路径修改）
-MODEL_PATH = "./Qwen/Qwen3-1.7B"
+MODEL_PATH = "./Qwen3-1.7B"
 # 测试根目录
 ROOT_OUTPUT_DIR = "./sglang_perf_test/"
 # 压测参数（调整为串行测试参数）
 NUM_PROMPTS = 10                # 测试请求数量
 PROMPT_LENGTH = 512              # 输入prompt长度（token数）
-GENERATION_LENGTH = 128          # 生成文本长度（token数）
+GENERATION_LENGTH = 1024          # 生成文本长度（token数）
 
 # 创建根目录
 os.makedirs(ROOT_OUTPUT_DIR, exist_ok=True)
@@ -98,9 +98,12 @@ def run_performance_test(test_mode, runtime_config):
             result = engine.generate(
                 prompt=prompt,
                 sampling_params={
-                    'max_new_tokens':GENERATION_LENGTH,
-                    'temperature': 0.7,
-                    'top_p': 0.95
+                    'max_new_tokens':1024,
+                    'temperature': 0.8,
+                    'top_p': 0.95,
+                    'repetition_penalty': 1.0,
+                    'top_k': 100,
+                    'presence_penalty': 0.0
                     }
             )
 
@@ -244,7 +247,7 @@ def build_runtime_configs():
     original_config.hybrid_kvcache_ratio = None
     original_config.swa_full_tokens_ratio = 0.8
     original_config.disable_hybrid_swa_memory = False
-    original_config.device = "cuda"  # 改为你实际使用的设备（cuda/musa）
+    original_config.device = "musa"  # 改为你实际使用的设备（cuda/musa）
     original_config.tp_size = 1
     original_config.pp_size = 1
     original_config.max_micro_batch_size = 32
@@ -280,7 +283,7 @@ def build_runtime_configs():
     # optimized_config.max_prefill_tokens = 16384
     # optimized_config.schedule_policy = "shortest_first"# 优化：短请求优先调度
     # optimized_config.schedule_conservativeness = 0.7   # 优化：降低调度保守度
-    # optimized_config.page_size = 16                    # 优化：增大KV缓存页大小
+    # optimized_config.page_size = 64                    # 优化：增大KV缓存页大小
     # optimized_config.hybrid_kvcache_ratio = 0.6        # 优化：启用混合KV缓存
     # optimized_config.swa_full_tokens_ratio = 0.7       # 优化：降低SWA全token比例
     # optimized_config.disable_hybrid_swa_memory = False
