@@ -38,10 +38,17 @@ def generate_test_prompt(length):
 def cleanup_engine(engine):
     """清理Engine资源，释放显存"""
     if engine is not None:
+        engine.shutdown()
         del engine
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+    elif torch.musa.is_available():
+        torch.musa.empty_cache()
+        torch.musa.ipc_collect()
+
     gc.collect()
-    if torch.cuda.is_available() or torch.musa.is_available():
-        torch.cuda.empty_cache() if torch.cuda.is_available() else torch.musa.empty_cache()
     log_info("Engine资源已清理完成")
 
 # ===================== 性能测试核心函数 =====================
@@ -86,7 +93,7 @@ def run_performance_test(test_mode, runtime_config):
         try:
             prompt = generate_test_prompt(PROMPT_LENGTH)
             start_time = time.time()
-            
+
             # 执行离线generate
             result = engine.generate(
                 prompt=prompt,
@@ -94,12 +101,12 @@ def run_performance_test(test_mode, runtime_config):
                     'max_new_tokens':GENERATION_LENGTH,
                     'temperature': 0.7,
                     'top_p': 0.95
-                    }                
+                    }
             )
-            
+
             end_time = time.time()
             latency = end_time - start_time
-            
+
             # 兼容不同版本的返回值格式（核心修复点）
             if hasattr(result, 'outputs'):
                 # 旧版本：返回对象，有outputs属性
@@ -112,10 +119,10 @@ def run_performance_test(test_mode, runtime_config):
                 generated_text = result['outputs'][0]['text']
             else:
                 raise ValueError(f"不支持的返回值格式: {type(result)}")
-            
+
             # 计算生成的token数（用空格分割，兼容大部分tokenizer）
             generated_tokens = len(generated_text.strip().split()) if generated_text else 0
-            
+
             return {
                 "prompt_id": prompt_id,
                 "status": "success",
@@ -138,7 +145,7 @@ def run_performance_test(test_mode, runtime_config):
     log_info(f"{test_mode} 测试开始：{NUM_PROMPTS}个请求，串行执行")
     total_start = time.time()
     results = []
-    
+
     # 串行执行所有请求
     for prompt_id in range(NUM_PROMPTS):
         result = send_generate_request(prompt_id)
@@ -146,7 +153,7 @@ def run_performance_test(test_mode, runtime_config):
         # 可选：打印单个请求进度
         if (prompt_id + 1) % 10 == 0:
             log_info(f"{test_mode} 已完成 {prompt_id + 1}/{NUM_PROMPTS} 个请求")
-    
+
     # 计算总耗时
     total_end = time.time()
     total_time = total_end - total_start
@@ -154,7 +161,7 @@ def run_performance_test(test_mode, runtime_config):
     # 统计结果
     success_results = [r for r in results if r["status"] == "success"]
     total_tokens = sum([r["generated_tokens"] for r in success_results])
-    
+
     # 核心性能指标计算
     success_rate = len(success_results) / NUM_PROMPTS * 100 if NUM_PROMPTS > 0 else 0
     avg_latency = np.mean([r["latency"] for r in success_results]) if success_results else 0
@@ -187,7 +194,7 @@ def run_performance_test(test_mode, runtime_config):
     # 1. JSON汇总
     with open(metrics_file, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=4, ensure_ascii=False)
-    
+
     # 2. CSV详细数据
     with open(csv_file, "w", encoding="utf-8") as f:
         f.write("prompt_id,status,latency,generated_tokens,tokens_per_second,error\n")
@@ -257,7 +264,9 @@ def build_runtime_configs():
     original_config.delete_ckpt_after_loading = False
 
     # 2. 优化参数配置
-    # optimized_config = ServerArgs(model_path=MODEL_PATH)
+    optimized_config = ServerArgs(model_path=MODEL_PATH)
+    optimized_config.__dict__.update(original_config.__dict__)
+
     # optimized_config.tokenizer_mode = "auto"
     # optimized_config.tokenizer_worker_num = 4          # 优化：增加分词器工作进程
     # optimized_config.load_format = "safetensors"
@@ -281,10 +290,10 @@ def build_runtime_configs():
     # optimized_config.max_micro_batch_size = 32         # 优化：设置微批大小
     # optimized_config.random_seed = 239081663
     # optimized_config.attention_backend = "fa3"
-    # optimized_config.sampling_backend = "flashinfer"
+    #optimized_config.sampling_backend = "flashinfer"
     # optimized_config.triton_attention_num_kv_splits = 4# 优化：调整KV拆分数量
     # optimized_config.num_continuous_decode_steps = 4   # 优化：增加连续解码步数
-    # optimized_config.disable_cuda_graph = False        # 优化：启用CUDA Graph
+    #optimized_config.disable_cuda_graph = False        # 优化：启用CUDA Graph
     # optimized_config.cuda_graph_max_bs = 32            # 优化：CUDA Graph最大批大小
     # optimized_config.cuda_graph_bs = 16                # 优化：CUDA Graph批大小
     # optimized_config.enable_torch_compile = True       # 优化：启用Torch Compile
@@ -295,13 +304,11 @@ def build_runtime_configs():
     # optimized_config.enable_dynamic_batch_tokenizer = True # 优化：启用动态批处理分词
     # optimized_config.dynamic_batch_tokenizer_batch_size = 32
     # optimized_config.dynamic_batch_tokenizer_batch_timeout = 0.002
-    # optimized_config.cpu_offload_gb = 2                # 优化：启用CPU显存卸载
+    #optimized_config.cpu_offload_gb = 2                # 优化：启用CPU显存卸载
     # optimized_config.enable_hierarchical_cache = True  # 优化：启用分层KV缓存
     # optimized_config.hicache_ratio = 2.0
     # optimized_config.delete_ckpt_after_loading = True  # 优化：加载后删除检查点
     # optimized_config.moe_a2a_backend = "auto"
-    optimized_config = original_config
-    optimized_config.attention_backend = "fa3"
 
     return {
         "original": original_config,
@@ -312,7 +319,7 @@ def build_runtime_configs():
 def generate_comparison_report(original_metrics, optimized_metrics):
     """生成原始vs优化参数的对比报告"""
     log_info("\n========== 最终对比报告（串行执行）==========")
-    
+
     # 提取核心指标
     orig_throughput = original_metrics["performance"]["total_throughput_tokens_per_second"]
     opt_throughput = optimized_metrics["performance"]["total_throughput_tokens_per_second"]
@@ -330,12 +337,12 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     log_info(f"  原始参数: {orig_throughput:.2f} tokens/s")
     log_info(f"  优化参数: {opt_throughput:.2f} tokens/s")
     log_info(f"  提升率: {throughput_improvement:.2f}%")
-    
+
     log_info(f"\n平均延迟对比:")
     log_info(f"  原始参数: {orig_latency:.2f} 秒")
     log_info(f"  优化参数: {opt_latency:.2f} 秒")
     log_info(f"  变化率: {latency_change:.2f}%")
-    
+
     log_info(f"\n成功率对比:")
     log_info(f"  原始参数: {orig_success:.2f}%")
     log_info(f"  优化参数: {opt_success:.2f}%")
@@ -366,7 +373,7 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     report_file = os.path.join(ROOT_OUTPUT_DIR, "comparison_report_serial.json")
     with open(report_file, "w", encoding="utf-8") as f:
         json.dump(comparison_report, f, indent=4, ensure_ascii=False)
-    
+
     log_info(f"\n完整对比报告已保存至: {report_file}")
     log_info(f"所有测试结果根目录: {ROOT_OUTPUT_DIR}")
 
@@ -374,25 +381,25 @@ def generate_comparison_report(original_metrics, optimized_metrics):
 def main():
     """主测试流程（串行执行）"""
     log_info("========== 开始SGLang Offline Engine 性能对比测试（串行执行）==========")
-    
+
     # 1. 构建配置
     configs = build_runtime_configs()
-    
-    # 2. 执行原始参数测试
+
+    #2. 执行原始参数测试
     original_metrics = run_performance_test("original", configs["original"])
     if original_metrics is None:
         log_info("原始参数测试失败，终止测试")
         return
-    
+
     # 3. 执行优化参数测试
     optimized_metrics = run_performance_test("optimized", configs["optimized"])
     if optimized_metrics is None:
         log_info("优化参数测试失败")
         return
-    
+
     # 4. 生成对比报告
     generate_comparison_report(original_metrics, optimized_metrics)
-    
+
     log_info("\n========== 所有测试完成（串行执行）==========")
 
 if __name__ == "__main__":
