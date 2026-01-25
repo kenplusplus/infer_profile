@@ -142,8 +142,8 @@ async def run_async_performance_test(test_mode, runtime_config):
     log_info(f"{test_mode} Engine预热中...")
     warmup_prompts = [" ".join(["test"] * 10) for _ in range(2)]  # 批量预热
     await engine.async_generate(
-        prompts=warmup_prompts,
-        sampling_params={'max_new_tokens': 10}
+        warmup_prompts,
+        {'max_new_tokens': 10}
     )
     log_info(f"{test_mode} Engine预热完成")
 
