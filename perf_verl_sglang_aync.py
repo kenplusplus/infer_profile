@@ -15,10 +15,10 @@ MODEL_PATH = "./Qwen3-1.7B"
 # 测试根目录
 ROOT_OUTPUT_DIR = "./sglang_perf_test_async/"
 # 压测参数（异步批量测试参数）
-NUM_PROMPTS = 10                # 测试请求总数
+NUM_PROMPTS = 96                # 测试请求总数
 PROMPT_LENGTH = 512             # 输入prompt长度（token数）
 GENERATION_LENGTH = 1024        # 生成文本长度（token数）
-ASYNC_BATCH_SIZE = 5            # 异步批量大小（每批处理的请求数）
+ASYNC_BATCH_SIZE = 48           # 异步批量大小（每批处理的请求数）
 
 # 创建根目录
 os.makedirs(ROOT_OUTPUT_DIR, exist_ok=True)
@@ -370,10 +370,10 @@ async def main():
     configs = build_runtime_configs()
 
     # 2. 执行原始参数测试
-    original_metrics = await run_async_performance_test("original", configs["original"])
-    if original_metrics is None:
-        log_info("原始参数测试失败，终止测试")
-        return
+    #original_metrics = await run_async_performance_test("original", configs["original"])
+    #if original_metrics is None:
+    #    log_info("原始参数测试失败，终止测试")
+    #    return
 
     # 3. 执行优化参数测试
     optimized_metrics = await run_async_performance_test("optimized", configs["optimized"])
