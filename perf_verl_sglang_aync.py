@@ -5,7 +5,8 @@ from sglang import Engine
 import os
 import gc
 import torch
-import asyncio  # 新增异步依赖
+import asyncio
+import argparse  # 新增命令行参数解析
 
 from sglang.srt.server_args import PortArgs, ServerArgs
 
@@ -371,30 +372,59 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     log_info(f"所有测试结果根目录: {ROOT_OUTPUT_DIR}")
 
 # ===================== 异步主函数 =====================
-async def main():
-    """异步主测试流程"""
-    log_info("========== 开始SGLang Offline Engine 性能对比测试（异步非流式）==========")
+async def main(run_type):
+    """异步主测试流程（支持指定run_type）"""
+    # 校验run_type参数合法性
+    valid_run_types = ["original", "optimized", "both"]
+    if run_type not in valid_run_types:
+        log_info(f"错误：无效的run_type参数 '{run_type}'，有效值为：{valid_run_types}")
+        return
+
+    log_info(f"========== 开始SGLang Offline Engine 性能对比测试（异步非流式）==========")
+    log_info(f"测试类型: {run_type.upper()}")
 
     # 1. 构建配置
     configs = build_runtime_configs()
+    original_metrics = None
+    optimized_metrics = None
 
-    # 2. 执行原始参数测试
-    original_metrics = await run_async_performance_test("original", configs["original"])
-    if original_metrics is None:
-        log_info("原始参数测试失败，终止测试")
-        return
+    # 2. 根据run_type执行对应测试
+    if run_type in ["original", "both"]:
+        # 执行原始参数测试
+        original_metrics = await run_async_performance_test("original", configs["original"])
+        if original_metrics is None:
+            log_info("原始参数测试失败")
+            if run_type == "original":
+                return
+            else:  # both模式下原始测试失败，终止后续优化测试
+                log_info("both模式下原始参数测试失败，终止优化参数测试")
+                return
 
-    # 3. 执行优化参数测试
-    optimized_metrics = await run_async_performance_test("optimized", configs["optimized"])
-    if optimized_metrics is None:
-        log_info("优化参数测试失败")
-        return
+    if run_type in ["optimized", "both"]:
+        # 执行优化参数测试
+        optimized_metrics = await run_async_performance_test("optimized", configs["optimized"])
+        if optimized_metrics is None:
+            log_info("优化参数测试失败")
+            return
 
-    # 4. 生成对比报告
-    generate_comparison_report(original_metrics, optimized_metrics)
+    # 3. 仅both模式生成对比报告
+    if run_type == "both" and original_metrics and optimized_metrics:
+        generate_comparison_report(original_metrics, optimized_metrics)
 
-    log_info("\n========== 所有异步测试完成 ==========")
+    log_info("\n========== 测试完成 ==========")
 
 if __name__ == "__main__":
+    # 解析命令行参数
+    parser = argparse.ArgumentParser(description="SGLang异步性能测试工具")
+    parser.add_argument(
+        "-r",
+        "--run_type", 
+        type=str, 
+        default="both",
+        choices=["original", "optimized", "both"],
+        help="测试类型：original(仅原始配置) / optimized(仅优化配置) / both(两者都测并对比)"
+    )
+    args = parser.parse_args()
+
     # 运行异步主函数
-    asyncio.run(main())
+    asyncio.run(main(args.run_type))
