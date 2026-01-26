@@ -22,6 +22,9 @@ GENERATION_LENGTH = 1024          # 生成文本长度（token数）
 os.makedirs(ROOT_OUTPUT_DIR, exist_ok=True)
 GLOBAL_LOG_FILE = os.path.join(ROOT_OUTPUT_DIR, "global_test_log.txt")
 
+def is_musa():
+    return hasattr(torch, "musa") and torch.musa.is_available()
+    
 # ===================== 通用工具函数 =====================
 def log_info(msg):
     """全局日志函数：记录日志并打印"""
@@ -228,6 +231,12 @@ def run_performance_test(test_mode, runtime_config):
 # ===================== 构建测试配置 =====================
 def build_runtime_configs():
     """构建原始和优化两种RuntimeConfig配置"""
+
+    if is_musa():
+        device = "musa"
+    else:
+        device = "cuda"
+
     # 1. 原始参数配置
     original_config = ServerArgs(model_path=MODEL_PATH)
     original_config.tokenizer_mode = "auto"
@@ -247,7 +256,7 @@ def build_runtime_configs():
     original_config.hybrid_kvcache_ratio = None
     original_config.swa_full_tokens_ratio = 0.8
     original_config.disable_hybrid_swa_memory = False
-    original_config.device = "musa"  # 改为你实际使用的设备（cuda/musa）
+    original_config.device = device  # 改为你实际使用的设备（cuda/musa）
     original_config.tp_size = 1
     original_config.pp_size = 1
     original_config.max_micro_batch_size = 32

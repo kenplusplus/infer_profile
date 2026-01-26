@@ -379,10 +379,10 @@ async def main():
     configs = build_runtime_configs()
 
     # 2. 执行原始参数测试
-    #original_metrics = await run_async_performance_test("original", configs["original"])
-    #if original_metrics is None:
-    #    log_info("原始参数测试失败，终止测试")
-    #    return
+    original_metrics = await run_async_performance_test("original", configs["original"])
+    if original_metrics is None:
+        log_info("原始参数测试失败，终止测试")
+        return
 
     # 3. 执行优化参数测试
     optimized_metrics = await run_async_performance_test("optimized", configs["optimized"])
