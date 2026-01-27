@@ -12,7 +12,7 @@ from sglang.srt.server_args import ServerArgs
 
 # ===================== Global Configuration =====================
 # Test root directory
-ROOT_OUTPUT_DIR = "./sglang_perf_test_async/"
+ROOT_OUTPUT_DIR = "./results/sglang_perf_test_async/"
 # Performance test parameters (async batch test parameters) - set as default values, actual values are overridden by command line arguments
 PROMPT_LENGTH = 512             # Input prompt length (number of tokens), not exposed to command line configuration temporarily
 
