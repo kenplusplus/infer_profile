@@ -249,7 +249,7 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
     return metrics
 
 # ===================== Build Test Configurations =====================
-def build_runtime_configs(model_path):
+def build_runtime_configs(model_path, async_batch_size):
     """Build two RuntimeConfig configurations: original and optimized"""
 
     if is_musa():
@@ -279,7 +279,7 @@ def build_runtime_configs(model_path):
     original_config.device = device  # Change to your actual device (cuda/musa)
     original_config.tp_size = 1
     original_config.pp_size = 1
-    original_config.max_micro_batch_size = 32
+    original_config.max_micro_batch_size = async_batch_size
     original_config.random_seed = 239081663
     original_config.attention_backend = "triton"
     original_config.sampling_backend = "flashinfer"
@@ -391,7 +391,7 @@ async def main(run_type, model_path, num_prompts, generation_length, async_batch
     log_info(f"Async batch size: {async_batch_size}")
 
     # 1. Build configurations (pass custom model path)
-    configs = build_runtime_configs(model_path)
+    configs = build_runtime_configs(model_path, async_batch_size)
     original_metrics = None
     optimized_metrics = None
 
