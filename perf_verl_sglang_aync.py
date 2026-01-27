@@ -249,7 +249,7 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
     return metrics
 
 # ===================== Build Test Configurations =====================
-def build_runtime_configs(model_path, async_batch_size):
+def build_runtime_configs(model_path, micro_batch_size):
     """Build two RuntimeConfig configurations: original and optimized"""
 
     if is_musa():
@@ -279,7 +279,7 @@ def build_runtime_configs(model_path, async_batch_size):
     original_config.device = device  # Change to your actual device (cuda/musa)
     original_config.tp_size = 1
     original_config.pp_size = 1
-    original_config.max_micro_batch_size = async_batch_size
+    original_config.max_micro_batch_size = micro_batch_size
     original_config.random_seed = 239081663
     original_config.attention_backend = "triton"
     original_config.sampling_backend = "flashinfer"
@@ -375,7 +375,7 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     log_info(f"All test results root directory: {ROOT_OUTPUT_DIR}")
 
 # ===================== Async Main Function =====================
-async def main(run_type, model_path, num_prompts, generation_length, async_batch_size):
+async def main(run_type, model_path, num_prompts, generation_length, async_batch_size, micro_batch_size):
     """Async main test flow (supports specified run_type and custom parameters)"""
     # Validate run_type parameter validity
     valid_run_types = ["original", "optimized", "both"]
@@ -391,7 +391,7 @@ async def main(run_type, model_path, num_prompts, generation_length, async_batch
     log_info(f"Async batch size: {async_batch_size}")
 
     # 1. Build configurations (pass custom model path)
-    configs = build_runtime_configs(model_path, async_batch_size)
+    configs = build_runtime_configs(model_path, micro_batch_size)
     original_metrics = None
     optimized_metrics = None
 
@@ -443,7 +443,7 @@ if __name__ == "__main__":
         "-r",
         "--run_type", 
         type=str, 
-        default="both",
+        default="optimized",
         choices=["original", "optimized", "both"],
         help="Test type: original(only original config) / optimized(only optimized config) / both(test both and compare)"
     )
@@ -475,6 +475,13 @@ if __name__ == "__main__":
         default=96,
         help="Total number of test requests, default value: 96"
     )
+    parser.add_argument(
+        "-i",
+        "--micro_batch_size", 
+        type=int, 
+        default=32,
+        help="Micro batch size, default value: 32"
+    )
     args = parser.parse_args()
 
     # Validate numerical parameter validity
@@ -494,5 +501,6 @@ if __name__ == "__main__":
         args.model_path,
         args.num_prompts,
         args.generation_length,
-        args.async_batch_size
+        args.async_batch_size,
+        args.micro_batch_size
     ))
