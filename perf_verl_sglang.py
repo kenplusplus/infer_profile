@@ -5,29 +5,26 @@ from sglang import Engine
 import os
 import gc
 import torch
+import argparse  # Add command line argument parsing
 
-from sglang.srt.server_args import PortArgs, ServerArgs
+from sglang.srt.server_args import ServerArgs
 
-# ===================== 全局配置 =====================
-# 模型路径（请根据你的实际路径修改）
-MODEL_PATH = "./Qwen3-1.7B"
-# 测试根目录
-ROOT_OUTPUT_DIR = "./sglang_perf_test/"
-# 压测参数（调整为串行测试参数）
-NUM_PROMPTS = 10                # 测试请求数量
-PROMPT_LENGTH = 512              # 输入prompt长度（token数）
-GENERATION_LENGTH = 1024          # 生成文本长度（token数）
+# ===================== Global Configuration =====================
+# Test root directory
+ROOT_OUTPUT_DIR = "./results/sglang_perf_test_sync/"
+# Performance test parameters (sync batch test parameters) - set as default values, actual values are overridden by command line arguments
+PROMPT_LENGTH = 512             # Input prompt length (number of tokens), not exposed to command line configuration temporarily
 
-# 创建根目录
+# Create root directory
 os.makedirs(ROOT_OUTPUT_DIR, exist_ok=True)
 GLOBAL_LOG_FILE = os.path.join(ROOT_OUTPUT_DIR, "global_test_log.txt")
 
 def is_musa():
     return hasattr(torch, "musa") and torch.musa.is_available()
-    
-# ===================== 通用工具函数 =====================
+
+# ===================== General Utility Functions =====================
 def log_info(msg):
-    """全局日志函数：记录日志并打印"""
+    """Global logging function: record logs and print"""
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
     log_msg = f"[{timestamp}] {msg}"
     print(log_msg)
@@ -35,11 +32,11 @@ def log_info(msg):
         f.write(log_msg + "\n")
 
 def generate_test_prompt(length):
-    """生成指定长度的测试Prompt"""
+    """Generate test prompt with specified length"""
     return " ".join(["test"] * length)
 
 def cleanup_engine(engine):
-    """清理Engine资源，释放显存"""
+    """Clean up Engine resources and release GPU memory"""
     if engine is not None:
         engine.shutdown()
         del engine
@@ -52,139 +49,160 @@ def cleanup_engine(engine):
         torch.musa.ipc_collect()
 
     gc.collect()
-    log_info("Engine资源已清理完成")
+    log_info("Engine resources cleaned up successfully")
 
-# ===================== 性能测试核心函数 =====================
-def run_performance_test(test_mode, runtime_config):
+# ===================== Sync Performance Test Core Functions =====================
+def send_batch_requests(engine, prompt_batch, prompt_id_batch, generation_length):
     """
-    执行单次性能测试（串行执行）
-    :param test_mode: 测试模式（original/optimized）
-    :param runtime_config: 对应的RuntimeConfig配置
-    :return: 测试结果字典
+    Send batch requests synchronously
+    :param engine: SGLang Engine instance
+    :param prompt_batch: List of batch prompts
+    :param prompt_id_batch: Corresponding prompt ID list
+    :param generation_length: Generated text length (number of tokens)
+    :return: List of batch request results
     """
-    # 初始化测试目录
+    sampling_params = {
+        'max_new_tokens': generation_length,
+        'temperature': 0.8,
+        'top_p': 0.95,
+        'repetition_penalty': 1.0,
+        'top_k': 100,
+        'presence_penalty': 0.0
+    }
+
+    try:
+        batch_start_time = time.time()
+        # Core: Synchronous batch generation (Non-streaming Synchronous Generation)
+        outputs = engine.generate(prompt_batch, sampling_params)  # 替换为同步generate接口
+        batch_end_time = time.time()
+
+        batch_results = []
+        for idx, (prompt_id, output) in enumerate(zip(prompt_id_batch, outputs)):
+            # Calculate single request latency (average total batch time)
+            single_latency = (batch_end_time - batch_start_time) / len(prompt_batch)
+
+            # Compatible with return value formats
+            if hasattr(output, 'text'):
+                generated_text = output.text
+            elif isinstance(output, dict) and 'text' in output:
+                generated_text = output['text']
+            elif isinstance(output, dict) and 'outputs' in output:
+                generated_text = output['outputs'][0]['text']
+            else:
+                raise ValueError(f"Unsupported return value format: {type(output)}")
+
+            generated_tokens = len(generated_text.strip().split()) if generated_text else 0
+
+            batch_results.append({
+                "prompt_id": prompt_id,
+                "status": "success",
+                "latency": single_latency,
+                "generated_tokens": generated_tokens,
+                "tokens_per_second": generated_tokens / single_latency if single_latency > 0 else 0
+            })
+        return batch_results
+    except Exception as e:
+        # Mark all prompts as error when batch request fails
+        return [{
+            "prompt_id": prompt_id,
+            "status": "error",
+            "error": str(e),
+            "latency": 0,
+            "generated_tokens": 0,
+            "tokens_per_second": 0
+        } for prompt_id in prompt_id_batch]
+
+def run_sync_performance_test(test_mode, runtime_config, model_path, num_prompts, prompt_length, generation_length, sync_batch_size):
+    """
+    Execute synchronous performance test (Non-streaming Synchronous Generation)
+    :param test_mode: Test mode (original/optimized)
+    :param runtime_config: Corresponding RuntimeConfig configuration
+    :param model_path: Model path
+    :param num_prompts: Total number of test requests
+    :param prompt_length: Input prompt length
+    :param generation_length: Generated text length
+    :param sync_batch_size: Synchronous batch size
+    :return: Test result dictionary
+    """
+    # Initialize test directory
     output_dir = os.path.join(ROOT_OUTPUT_DIR, test_mode)
     os.makedirs(output_dir, exist_ok=True)
     metrics_file = os.path.join(output_dir, "metrics.json")
     csv_file = os.path.join(output_dir, "performance.csv")
-    log_info(f"\n========== 开始{test_mode.upper()}参数测试 ==========")
+    log_info(f"\n========== Start {test_mode.upper()} parameter sync test ==========")
 
-    # 初始化Engine
-    log_info(f"初始化{test_mode}参数的SGLang Engine...")
+    # Initialize Engine
+    log_info(f"Initializing SGLang Engine with {test_mode} parameters...")
     try:
         engine = Engine(
-            model_path=MODEL_PATH,
+            model_path=model_path,
             server_args=runtime_config,
         )
     except Exception as e:
-        log_info(f"Engine初始化失败: {str(e)}")
+        log_info(f"Engine initialization failed: {str(e)}")
         return None
 
-    # 预热（避免首次请求耗时影响测试）
-    log_info(f"{test_mode} Engine预热中...")
-    warmup_prompt = " ".join(["test"] * 10)
-    engine.generate(
-        prompt=warmup_prompt,
-        sampling_params={
-            'max_new_tokens':10
-            }
-        )
-    log_info(f"{test_mode} Engine预热完成")
+    # Warm up (avoid first request latency affecting test results)
+    log_info(f"{test_mode} Engine warming up...")
+    warmup_prompts = [" ".join(["test"] * 10) for _ in range(2)]  # Batch warmup
+    engine.generate(  # 同步预热
+        warmup_prompts,
+        {'max_new_tokens': 10}
+    )
+    log_info(f"{test_mode} Engine warmup completed")
 
-    # 定义单个请求处理函数
-    def send_generate_request(prompt_id):
-        try:
-            prompt = generate_test_prompt(PROMPT_LENGTH)
-            start_time = time.time()
+    # Generate all test prompts and corresponding IDs
+    all_prompts = [generate_test_prompt(prompt_length) for _ in range(num_prompts)]
+    all_prompt_ids = list(range(num_prompts))
 
-            # 执行离线generate
-            result = engine.generate(
-                prompt=prompt,
-                sampling_params={
-                    'max_new_tokens':1024,
-                    'temperature': 0.8,
-                    'top_p': 0.95,
-                    'repetition_penalty': 1.0,
-                    'top_k': 100,
-                    'presence_penalty': 0.0
-                    }
-            )
+    # Split into batches (group by SYNC_BATCH_SIZE)
+    prompt_batches = [
+        all_prompts[i:i + sync_batch_size]
+        for i in range(0, num_prompts, sync_batch_size)
+    ]
+    prompt_id_batches = [
+        all_prompt_ids[i:i + sync_batch_size]
+        for i in range(0, num_prompts, sync_batch_size)
+    ]
 
-            end_time = time.time()
-            latency = end_time - start_time
-
-            # 兼容不同版本的返回值格式（核心修复点）
-            if hasattr(result, 'outputs'):
-                # 旧版本：返回对象，有outputs属性
-                generated_text = result.outputs[0].text
-            elif isinstance(result, dict) and 'text' in result:
-                # 新版本：直接返回字典，包含text字段
-                generated_text = result['text']
-            elif isinstance(result, dict) and 'outputs' in result:
-                # 兼容其他字典格式
-                generated_text = result['outputs'][0]['text']
-            else:
-                raise ValueError(f"不支持的返回值格式: {type(result)}")
-
-            # 计算生成的token数（用空格分割，兼容大部分tokenizer）
-            generated_tokens = len(generated_text.strip().split()) if generated_text else 0
-
-            return {
-                "prompt_id": prompt_id,
-                "status": "success",
-                "latency": latency,
-                "generated_tokens": generated_tokens,
-                "tokens_per_second": generated_tokens / latency if latency > 0 else 0
-            }
-        except Exception as e:
-            log_info(f"{test_mode} 请求{prompt_id}失败: {str(e)}")
-            return {
-                "prompt_id": prompt_id,
-                "status": "error",
-                "error": str(e),
-                "latency": 0,
-                "generated_tokens": 0,
-                "tokens_per_second": 0
-            }
-
-    # 执行串行测试（移除并发逻辑）
-    log_info(f"{test_mode} 测试开始：{NUM_PROMPTS}个请求，串行执行")
+    # Execute sync test
+    log_info(f"{test_mode} sync test started: {num_prompts} requests, split into {len(prompt_batches)} batches, {sync_batch_size} requests per batch")
     total_start = time.time()
-    results = []
+    all_results = []
 
-    # 串行执行所有请求
-    for prompt_id in range(NUM_PROMPTS):
-        result = send_generate_request(prompt_id)
-        results.append(result)
-        # 可选：打印单个请求进度
-        if (prompt_id + 1) % 10 == 0:
-            log_info(f"{test_mode} 已完成 {prompt_id + 1}/{NUM_PROMPTS} 个请求")
+    # Execute sync requests batch by batch
+    for batch_idx, (prompt_batch, prompt_id_batch) in enumerate(zip(prompt_batches, prompt_id_batches)):
+        log_info(f"Processing batch {batch_idx + 1}/{len(prompt_batches)}, containing {len(prompt_batch)} prompts")
+        batch_results = send_batch_requests(engine, prompt_batch, prompt_id_batch, generation_length)
+        all_results.extend(batch_results)
 
-    # 计算总耗时
+    # Calculate total time consumption
     total_end = time.time()
     total_time = total_end - total_start
 
-    # 统计结果
-    success_results = [r for r in results if r["status"] == "success"]
+    # Statistics results
+    success_results = [r for r in all_results if r["status"] == "success"]
     total_tokens = sum([r["generated_tokens"] for r in success_results])
 
-    # 核心性能指标计算
-    success_rate = len(success_results) / NUM_PROMPTS * 100 if NUM_PROMPTS > 0 else 0
+    # Core performance metrics calculation
+    success_rate = len(success_results) / num_prompts * 100 if num_prompts > 0 else 0
     avg_latency = np.mean([r["latency"] for r in success_results]) if success_results else 0
     avg_throughput = np.mean([r["tokens_per_second"] for r in success_results]) if success_results else 0
     total_throughput = total_tokens / total_time if total_time > 0 else 0
 
-    # 构建指标字典
+    # Build metrics dictionary
     metrics = {
         "test_config": {
-            "num_prompts": NUM_PROMPTS,
-            "prompt_length": PROMPT_LENGTH,
-            "generation_length": GENERATION_LENGTH,
+            "num_prompts": num_prompts,
+            "prompt_length": prompt_length,
+            "generation_length": generation_length,
             "test_mode": test_mode,
-            "execution_mode": "serial"  # 标记为串行执行
+            "execution_mode": "synchronous",  # Mark as synchronous execution
+            "sync_batch_size": sync_batch_size,
+            "model_path": model_path
         },
         "performance": {
-            "total_requests": NUM_PROMPTS,
+            "total_requests": num_prompts,
             "successful_requests": len(success_results),
             "success_rate": success_rate,
             "total_time_seconds": total_time,
@@ -193,18 +211,18 @@ def run_performance_test(test_mode, runtime_config):
             "total_throughput_tokens_per_second": total_throughput,
             "total_tokens_generated": total_tokens
         },
-        "detailed_results": results
+        "detailed_results": all_results
     }
 
-    # 保存结果文件
-    # 1. JSON汇总
+    # Save result files
+    # 1. JSON summary
     with open(metrics_file, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=4, ensure_ascii=False)
 
-    # 2. CSV详细数据
+    # 2. CSV detailed data
     with open(csv_file, "w", encoding="utf-8") as f:
         f.write("prompt_id,status,latency,generated_tokens,tokens_per_second,error\n")
-        for r in results:
+        for r in all_results:
             error = r.get("error", "")
             f.write(
                 f"{r['prompt_id']},{r['status']},{r.get('latency', 0):.4f},"
@@ -212,33 +230,34 @@ def run_performance_test(test_mode, runtime_config):
                 f"{error}\n"
             )
 
-    # 打印测试汇总
-    log_info(f"\n========== {test_mode.upper()}参数测试汇总 ==========")
-    log_info(f"总请求数: {NUM_PROMPTS}")
-    log_info(f"成功请求数: {len(success_results)}")
-    log_info(f"成功率: {success_rate:.2f}%")
-    log_info(f"总耗时: {total_time:.2f}秒")
-    log_info(f"平均延迟: {avg_latency:.2f}秒")
-    log_info(f"平均吞吐率: {avg_throughput:.2f} tokens/s")
-    log_info(f"总吞吐率: {total_throughput:.2f} tokens/s")
-    log_info(f"总生成Token数: {total_tokens}")
-    log_info(f"{test_mode}测试结果保存至: {output_dir}")
+    # Print test summary
+    log_info(f"\n========== {test_mode.upper()} parameter test summary ==========")
+    log_info(f"Model path: {model_path}")
+    log_info(f"Total requests: {num_prompts}")
+    log_info(f"Successful requests: {len(success_results)}")
+    log_info(f"Success rate: {success_rate:.2f}%")
+    log_info(f"Total time consumption: {total_time:.2f} seconds")
+    log_info(f"Average latency: {avg_latency:.2f} seconds")
+    log_info(f"Average throughput: {avg_throughput:.2f} tokens/s")
+    log_info(f"Total throughput: {total_throughput:.2f} tokens/s")
+    log_info(f"Total generated tokens: {total_tokens}")
+    log_info(f"{test_mode} test results saved to: {output_dir}")
 
-    # 清理资源
+    # Clean up resources
     cleanup_engine(engine)
     return metrics
 
-# ===================== 构建测试配置 =====================
-def build_runtime_configs():
-    """构建原始和优化两种RuntimeConfig配置"""
+# ===================== Build Test Configurations =====================
+def build_runtime_configs(model_path, micro_batch_size):
+    """Build two RuntimeConfig configurations: original and optimized"""
 
     if is_musa():
         device = "musa"
     else:
         device = "cuda"
 
-    # 1. 原始参数配置
-    original_config = ServerArgs(model_path=MODEL_PATH)
+    # 1. Original parameter configuration
+    original_config = ServerArgs(model_path=model_path)
     original_config.tokenizer_mode = "auto"
     original_config.tokenizer_worker_num = 1
     original_config.load_format = "safetensors"
@@ -256,10 +275,10 @@ def build_runtime_configs():
     original_config.hybrid_kvcache_ratio = None
     original_config.swa_full_tokens_ratio = 0.8
     original_config.disable_hybrid_swa_memory = False
-    original_config.device = device  # 改为你实际使用的设备（cuda/musa）
+    original_config.device = device  # Change to your actual device (cuda/musa)
     original_config.tp_size = 1
     original_config.pp_size = 1
-    original_config.max_micro_batch_size = 32
+    original_config.max_micro_batch_size = micro_batch_size
     original_config.random_seed = 239081663
     original_config.attention_backend = "triton"
     original_config.sampling_backend = "flashinfer"
@@ -275,64 +294,29 @@ def build_runtime_configs():
     original_config.enable_hierarchical_cache = False
     original_config.delete_ckpt_after_loading = False
 
-    # 2. 优化参数配置
-    optimized_config = ServerArgs(model_path=MODEL_PATH)
+    # 2. Optimized parameter configuration
+    optimized_config = ServerArgs(model_path=model_path)
     optimized_config.__dict__.update(original_config.__dict__)
 
-    # optimized_config.tokenizer_mode = "auto"
-    # optimized_config.tokenizer_worker_num = 4          # 优化：增加分词器工作进程
-    # optimized_config.load_format = "safetensors"
-    # optimized_config.trust_remote_code = True
-    # optimized_config.dtype = "bfloat16"
-    # optimized_config.kv_cache_dtype = "auto"
-    optimized_config.mem_fraction_static = 0.7         # 优化：增大静态显存比例
-    # optimized_config.max_running_requests = 64         # 优化：增大最大并发请求数
-    # optimized_config.max_queued_requests = 9223372036854775807
-    #optimized_config.chunked_prefill_size = 8192
-    #optimized_config.max_prefill_tokens = 16384
-    # optimized_config.schedule_policy = "shortest_first"# 优化：短请求优先调度
-    # optimized_config.schedule_conservativeness = 0.7   # 优化：降低调度保守度
-    optimized_config.page_size = 64                    # 优化：增大KV缓存页大小
-    optimized_config.hybrid_kvcache_ratio = 0.6        # 优化：启用混合KV缓存
-    # optimized_config.swa_full_tokens_ratio = 0.7       # 优化：降低SWA全token比例
-    # optimized_config.disable_hybrid_swa_memory = False
-    # optimized_config.device = "cuda"  # 改为你实际使用的设备（cuda/musa）
-    # optimized_config.tp_size = 1
-    # optimized_config.pp_size = 1
-    # optimized_config.max_micro_batch_size = 32         # 优化：设置微批大小
-    # optimized_config.random_seed = 239081663
+    optimized_config.mem_fraction_static = 0.7         # Optimization: Increase static memory ratio
+    optimized_config.page_size = 64                    # Optimization: Increase KV cache page size
+    optimized_config.hybrid_kvcache_ratio = 0.6        # Optimization: Enable hybrid KV cache
     optimized_config.attention_backend = "fa3"
     optimized_config.sampling_backend = "flashinfer"
-    # optimized_config.triton_attention_num_kv_splits = 4# 优化：调整KV拆分数量
-    optimized_config.num_continuous_decode_steps = 4   # 优化：增加连续解码步数
-    optimized_config.disable_cuda_graph = False        # 优化：启用CUDA Graph
-    #optimized_config.cuda_graph_max_bs = 32            # 优化：CUDA Graph最大批大小
-    #optimized_config.cuda_graph_bs = 16                # 优化：CUDA Graph批大小
-    # optimized_config.enable_torch_compile = True       # 优化：启用Torch Compile
-    # optimized_config.torch_compile_max_bs = 32         # 优化：Torch Compile最大批大小
-    # optimized_config.enable_mixed_chunk = True         # 优化：启用混合chunk处理
-    # optimized_config.enable_two_batch_overlap = True   # 优化：启用批处理重叠
-    # optimized_config.enable_tokenizer_batch_encode = True # 优化：启用分词器批量编码
-    # optimized_config.enable_dynamic_batch_tokenizer = True # 优化：启用动态批处理分词
-    # optimized_config.dynamic_batch_tokenizer_batch_size = 32
-    # optimized_config.dynamic_batch_tokenizer_batch_timeout = 0.002
-    # optimized_config.cpu_offload_gb = 2                # 优化：启用CPU显存卸载
-    # optimized_config.enable_hierarchical_cache = True  # 优化：启用分层KV缓存
-    # optimized_config.hicache_ratio = 2.0
-    # optimized_config.delete_ckpt_after_loading = True  # 优化：加载后删除检查点
-    # optimized_config.moe_a2a_backend = "auto"
+    optimized_config.num_continuous_decode_steps = 4   # Optimization: Increase continuous decode steps
+    optimized_config.disable_cuda_graph = False        # Optimization: Enable CUDA Graph
 
     return {
         "original": original_config,
         "optimized": optimized_config
     }
 
-# ===================== 生成对比报告 =====================
+# ===================== Generate Comparison Report =====================
 def generate_comparison_report(original_metrics, optimized_metrics):
-    """生成原始vs优化参数的对比报告"""
-    log_info("\n========== 最终对比报告（串行执行）==========")
+    """Generate comparison report between original vs optimized parameters"""
+    log_info("\n========== Final Comparison Report (Synchronous Execution) ==========")
 
-    # 提取核心指标
+    # Extract core metrics
     orig_throughput = original_metrics["performance"]["total_throughput_tokens_per_second"]
     opt_throughput = optimized_metrics["performance"]["total_throughput_tokens_per_second"]
     orig_latency = original_metrics["performance"]["average_latency_seconds"]
@@ -340,26 +324,26 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     orig_success = original_metrics["performance"]["success_rate"]
     opt_success = optimized_metrics["performance"]["success_rate"]
 
-    # 计算提升率
+    # Calculate improvement rate
     throughput_improvement = ((opt_throughput - orig_throughput) / orig_throughput * 100) if orig_throughput > 0 else 0
     latency_change = ((opt_latency - orig_latency) / orig_latency * 100) if orig_latency > 0 else 0
 
-    # 打印对比结果
-    log_info(f"总吞吐率对比:")
-    log_info(f"  原始参数: {orig_throughput:.2f} tokens/s")
-    log_info(f"  优化参数: {opt_throughput:.2f} tokens/s")
-    log_info(f"  提升率: {throughput_improvement:.2f}%")
+    # Print comparison results
+    log_info(f"Total throughput comparison:")
+    log_info(f"  Original parameters: {orig_throughput:.2f} tokens/s")
+    log_info(f"  Optimized parameters: {opt_throughput:.2f} tokens/s")
+    log_info(f"  Improvement rate: {throughput_improvement:.2f}%")
 
-    log_info(f"\n平均延迟对比:")
-    log_info(f"  原始参数: {orig_latency:.2f} 秒")
-    log_info(f"  优化参数: {opt_latency:.2f} 秒")
-    log_info(f"  变化率: {latency_change:.2f}%")
+    log_info(f"\nAverage latency comparison:")
+    log_info(f"  Original parameters: {orig_latency:.2f} seconds")
+    log_info(f"  Optimized parameters: {opt_latency:.2f} seconds")
+    log_info(f"  Change rate: {latency_change:.2f}%")
 
-    log_info(f"\n成功率对比:")
-    log_info(f"  原始参数: {orig_success:.2f}%")
-    log_info(f"  优化参数: {opt_success:.2f}%")
+    log_info(f"\nSuccess rate comparison:")
+    log_info(f"  Original parameters: {orig_success:.2f}%")
+    log_info(f"  Optimized parameters: {opt_success:.2f}%")
 
-    # 保存对比报告
+    # Save comparison report
     comparison_report = {
         "test_config": original_metrics["test_config"],
         "comparison": {
@@ -382,37 +366,140 @@ def generate_comparison_report(original_metrics, optimized_metrics):
         "optimized_full_metrics": optimized_metrics
     }
 
-    report_file = os.path.join(ROOT_OUTPUT_DIR, "comparison_report_serial.json")
+    report_file = os.path.join(ROOT_OUTPUT_DIR, "comparison_report_sync.json")
     with open(report_file, "w", encoding="utf-8") as f:
         json.dump(comparison_report, f, indent=4, ensure_ascii=False)
 
-    log_info(f"\n完整对比报告已保存至: {report_file}")
-    log_info(f"所有测试结果根目录: {ROOT_OUTPUT_DIR}")
+    log_info(f"\nComplete comparison report saved to: {report_file}")
+    log_info(f"All test results root directory: {ROOT_OUTPUT_DIR}")
 
-# ===================== 主函数 =====================
-def main():
-    """主测试流程（串行执行）"""
-    log_info("========== 开始SGLang Offline Engine 性能对比测试（串行执行）==========")
-
-    # 1. 构建配置
-    configs = build_runtime_configs()
-
-    #2. 执行原始参数测试
-    original_metrics = run_performance_test("original", configs["original"])
-    if original_metrics is None:
-        log_info("原始参数测试失败，终止测试")
+# ===================== Sync Main Function =====================
+def main(run_type, model_path, num_prompts, generation_length, sync_batch_size, micro_batch_size):
+    """Sync main test flow (supports specified run_type and custom parameters)"""
+    # Validate run_type parameter validity
+    valid_run_types = ["original", "optimized", "both"]
+    if run_type not in valid_run_types:
+        log_info(f"Error: Invalid run_type parameter '{run_type}', valid values are: {valid_run_types}")
         return
 
-    # 3. 执行优化参数测试
-    optimized_metrics = run_performance_test("optimized", configs["optimized"])
-    if optimized_metrics is None:
-        log_info("优化参数测试失败")
-        return
+    log_info(f"========== Start SGLang Offline Engine Performance Comparison Test (Synchronous Non-streaming) ==========")
+    log_info(f"Test type: {run_type.upper()}")
+    log_info(f"Model path: {model_path}")
+    log_info(f"Total test requests: {num_prompts}")
+    log_info(f"Generated text length: {generation_length} tokens")
+    log_info(f"Sync batch size: {sync_batch_size}")
 
-    # 4. 生成对比报告
-    generate_comparison_report(original_metrics, optimized_metrics)
+    # 1. Build configurations (pass custom model path)
+    configs = build_runtime_configs(model_path, micro_batch_size)
+    original_metrics = None
+    optimized_metrics = None
 
-    log_info("\n========== 所有测试完成（串行执行）==========")
+    # 2. Execute corresponding tests according to run_type
+    if run_type in ["original", "both"]:
+        # Execute original parameter test
+        original_metrics = run_sync_performance_test(
+            "original",
+            configs["original"],
+            model_path,
+            num_prompts,
+            PROMPT_LENGTH,
+            generation_length,
+            sync_batch_size
+        )
+        if original_metrics is None:
+            log_info("Original parameter test failed")
+            if run_type == "original":
+                return
+            else:  # Original test failed in both mode, terminate subsequent optimized test
+                log_info("Original parameter test failed in both mode, terminating optimized parameter test")
+                return
+
+    if run_type in ["optimized", "both"]:
+        # Execute optimized parameter test
+        optimized_metrics = run_sync_performance_test(
+            "optimized",
+            configs["optimized"],
+            model_path,
+            num_prompts,
+            PROMPT_LENGTH,
+            generation_length,
+            sync_batch_size
+        )
+        if optimized_metrics is None:
+            log_info("Optimized parameter test failed")
+            return
+
+    # 3. Generate comparison report only in both mode
+    if run_type == "both" and original_metrics and optimized_metrics:
+        generate_comparison_report(original_metrics, optimized_metrics)
+
+    log_info("\n========== Test completed ==========")
 
 if __name__ == "__main__":
-    main()
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="SGLang Synchronous Performance Test Tool")
+    parser.add_argument(
+        "-r",
+        "--run_type",
+        type=str,
+        default="optimized",
+        choices=["original", "optimized", "both"],
+        help="Test type: original(only original config) / optimized(only optimized config) / both(test both and compare)"
+    )
+    parser.add_argument(
+        "-m",
+        "--model_path",
+        type=str,
+        default="./Qwen3-1.7B",
+        help="Model path, default value: ./Qwen3-1.7B"
+    )
+    parser.add_argument(
+        "-g",
+        "--generation_length",
+        type=int,
+        default=1024,
+        help="Generated text length (number of tokens), default value: 1024"
+    )
+    parser.add_argument(
+        "-b",
+        "--sync_batch_size",  # 参数名从async_batch_size改为sync_batch_size
+        type=int,
+        default=48,
+        help="Synchronous batch size (number of requests processed per batch), default value: 48"
+    )
+    parser.add_argument(
+        "-n",
+        "--num_prompts",
+        type=int,
+        default=96,
+        help="Total number of test requests, default value: 96"
+    )
+    parser.add_argument(
+        "-i",
+        "--micro_batch_size",
+        type=int,
+        default=32,
+        help="Micro batch size, default value: 32"
+    )
+    args = parser.parse_args()
+
+    # Validate numerical parameter validity
+    if args.generation_length <= 0:
+        log_info("Error: generation_length must be a positive integer")
+        exit(1)
+    if args.sync_batch_size <= 0:
+        log_info("Error: sync_batch_size must be a positive integer")
+        exit(1)
+    if args.num_prompts <= 0:
+        log_info("Error: num_prompts must be a positive integer")
+        exit(1)
+
+    # Run sync main function
+    main(
+        args.run_type,
+        args.model_path,
+        args.num_prompts,
+        args.generation_length,
+        args.sync_batch_size,
+        args.micro_batch_size
+    )
