@@ -71,10 +71,18 @@ def send_batch_requests(engine, prompt_batch, prompt_id_batch, generation_length
     }
 
     try:
+        profiler_dir = os.environ.get('SGLANG_TORCH_PROFILER_DIR')
+        if profiler_dir is not None:
+            os.makedirs(profiler_dir, exist_ok=True)
+            engine.start_profile()
+
         batch_start_time = time.time()
         # Core: Synchronous batch generation (Non-streaming Synchronous Generation)
         outputs = engine.generate(prompt_batch, sampling_params)  # 替换为同步generate接口
         batch_end_time = time.time()
+
+        if profiler_dir is not None:
+            engine.stop_profile()
 
         batch_results = []
         for idx, (prompt_id, output) in enumerate(zip(prompt_id_batch, outputs)):
