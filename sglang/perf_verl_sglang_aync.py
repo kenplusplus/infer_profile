@@ -70,18 +70,18 @@ async def async_send_batch_requests(engine, prompt_batch, prompt_id_batch, gener
         'top_k': 100,
         'presence_penalty': 0.0
     }
-    
+
     try:
         batch_start_time = time.time()
         # Core: Asynchronous batch generation (Non-streaming Asynchronous Generation)
         outputs = await engine.async_generate(prompt_batch, sampling_params)
         batch_end_time = time.time()
-        
+
         batch_results = []
         for idx, (prompt_id, output) in enumerate(zip(prompt_id_batch, outputs)):
             # Calculate single request latency (average total batch time, or use built-in output latency)
             single_latency = (batch_end_time - batch_start_time) / len(prompt_batch)
-            
+
             # Compatible with return value formats
             if hasattr(output, 'text'):
                 generated_text = output.text
@@ -91,9 +91,9 @@ async def async_send_batch_requests(engine, prompt_batch, prompt_id_batch, gener
                 generated_text = output['outputs'][0]['text']
             else:
                 raise ValueError(f"Unsupported return value format: {type(output)}")
-            
+
             generated_tokens = len(generated_text.strip().split()) if generated_text else 0
-            
+
             batch_results.append({
                 "prompt_id": prompt_id,
                 "status": "success",
@@ -158,11 +158,11 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
 
     # Split into batches (group by ASYNC_BATCH_SIZE)
     prompt_batches = [
-        all_prompts[i:i + async_batch_size] 
+        all_prompts[i:i + async_batch_size]
         for i in range(0, num_prompts, async_batch_size)
     ]
     prompt_id_batches = [
-        all_prompt_ids[i:i + async_batch_size] 
+        all_prompt_ids[i:i + async_batch_size]
         for i in range(0, num_prompts, async_batch_size)
     ]
 
@@ -200,7 +200,8 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
             "test_mode": test_mode,
             "execution_mode": "asynchronous",  # Mark as asynchronous execution
             "async_batch_size": async_batch_size,
-            "model_path": model_path
+            "model_path": model_path,
+            "tp_size": runtime_config.tp_size  # Add tp_size to test config for record
         },
         "performance": {
             "total_requests": num_prompts,
@@ -234,6 +235,7 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
     # Print test summary
     log_info(f"\n========== {test_mode.upper()} parameter test summary ==========")
     log_info(f"Model path: {model_path}")
+    log_info(f"TP size: {runtime_config.tp_size}")  # Add tp_size to log
     log_info(f"Total requests: {num_prompts}")
     log_info(f"Successful requests: {len(success_results)}")
     log_info(f"Success rate: {success_rate:.2f}%")
@@ -249,7 +251,7 @@ async def run_async_performance_test(test_mode, runtime_config, model_path, num_
     return metrics
 
 # ===================== Build Test Configurations =====================
-def build_runtime_configs(model_path, micro_batch_size):
+def build_runtime_configs(model_path, micro_batch_size, tp_size):
     """Build two RuntimeConfig configurations: original and optimized"""
 
     if is_musa():
@@ -277,7 +279,7 @@ def build_runtime_configs(model_path, micro_batch_size):
     original_config.swa_full_tokens_ratio = 0.8
     original_config.disable_hybrid_swa_memory = False
     original_config.device = device  # Change to your actual device (cuda/musa)
-    original_config.tp_size = 1
+    original_config.tp_size = tp_size  # Use configurable tp_size instead of hardcoded 1
     original_config.pp_size = 1
     original_config.max_micro_batch_size = micro_batch_size
     original_config.random_seed = 239081663
@@ -375,7 +377,7 @@ def generate_comparison_report(original_metrics, optimized_metrics):
     log_info(f"All test results root directory: {ROOT_OUTPUT_DIR}")
 
 # ===================== Async Main Function =====================
-async def main(run_type, model_path, num_prompts, generation_length, async_batch_size, micro_batch_size):
+async def main(run_type, model_path, num_prompts, generation_length, async_batch_size, micro_batch_size, tp_size):
     """Async main test flow (supports specified run_type and custom parameters)"""
     # Validate run_type parameter validity
     valid_run_types = ["original", "optimized", "both"]
@@ -386,12 +388,13 @@ async def main(run_type, model_path, num_prompts, generation_length, async_batch
     log_info(f"========== Start SGLang Offline Engine Performance Comparison Test (Asynchronous Non-streaming) ==========")
     log_info(f"Test type: {run_type.upper()}")
     log_info(f"Model path: {model_path}")
+    log_info(f"TP size: {tp_size}")  # Add tp_size to log
     log_info(f"Total test requests: {num_prompts}")
     log_info(f"Generated text length: {generation_length} tokens")
     log_info(f"Async batch size: {async_batch_size}")
 
-    # 1. Build configurations (pass custom model path)
-    configs = build_runtime_configs(model_path, micro_batch_size)
+    # 1. Build configurations (pass custom model path and tp_size)
+    configs = build_runtime_configs(model_path, micro_batch_size, tp_size)
     original_metrics = None
     optimized_metrics = None
 
@@ -399,12 +402,12 @@ async def main(run_type, model_path, num_prompts, generation_length, async_batch
     if run_type in ["original", "both"]:
         # Execute original parameter test
         original_metrics = await run_async_performance_test(
-            "original", 
-            configs["original"], 
-            model_path, 
-            num_prompts, 
-            PROMPT_LENGTH, 
-            generation_length, 
+            "original",
+            configs["original"],
+            model_path,
+            num_prompts,
+            PROMPT_LENGTH,
+            generation_length,
             async_batch_size
         )
         if original_metrics is None:
@@ -418,12 +421,12 @@ async def main(run_type, model_path, num_prompts, generation_length, async_batch
     if run_type in ["optimized", "both"]:
         # Execute optimized parameter test
         optimized_metrics = await run_async_performance_test(
-            "optimized", 
-            configs["optimized"], 
-            model_path, 
-            num_prompts, 
-            PROMPT_LENGTH, 
-            generation_length, 
+            "optimized",
+            configs["optimized"],
+            model_path,
+            num_prompts,
+            PROMPT_LENGTH,
+            generation_length,
             async_batch_size
         )
         if optimized_metrics is None:
@@ -441,46 +444,53 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SGLang Asynchronous Performance Test Tool")
     parser.add_argument(
         "-r",
-        "--run_type", 
-        type=str, 
+        "--run_type",
+        type=str,
         default="optimized",
         choices=["original", "optimized", "both"],
         help="Test type: original(only original config) / optimized(only optimized config) / both(test both and compare)"
     )
     parser.add_argument(
         "-m",
-        "--model_path", 
-        type=str, 
+        "--model_path",
+        type=str,
         default="./Qwen3-1.7B",
         help="Model path, default value: ./Qwen3-1.7B"
     )
     parser.add_argument(
         "-g",
-        "--generation_length", 
-        type=int, 
+        "--generation_length",
+        type=int,
         default=1024,
         help="Generated text length (number of tokens), default value: 1024"
     )
     parser.add_argument(
         "-b",
-        "--async_batch_size", 
-        type=int, 
+        "--async_batch_size",
+        type=int,
         default=48,
         help="Asynchronous batch size (number of requests processed per batch), default value: 48"
     )
     parser.add_argument(
         "-n",
-        "--num_prompts", 
-        type=int, 
+        "--num_prompts",
+        type=int,
         default=96,
         help="Total number of test requests, default value: 96"
     )
     parser.add_argument(
         "-i",
-        "--micro_batch_size", 
-        type=int, 
+        "--micro_batch_size",
+        type=int,
         default=32,
         help="Micro batch size, default value: 32"
+    )
+    parser.add_argument(
+        "-t",
+        "--tp_size",
+        type=int,
+        default=1,
+        help="Tensor parallelism (TP) size, default value: 1"
     )
     args = parser.parse_args()
 
@@ -494,6 +504,9 @@ if __name__ == "__main__":
     if args.num_prompts <= 0:
         log_info("Error: num_prompts must be a positive integer")
         exit(1)
+    if args.tp_size <= 0:
+        log_info("Error: tp_size must be a positive integer")
+        exit(1)
 
     # Run async main function
     asyncio.run(main(
@@ -502,5 +515,6 @@ if __name__ == "__main__":
         args.num_prompts,
         args.generation_length,
         args.async_batch_size,
-        args.micro_batch_size
+        args.micro_batch_size,
+        args.tp_size  # Pass tp_size to main function
     ))
