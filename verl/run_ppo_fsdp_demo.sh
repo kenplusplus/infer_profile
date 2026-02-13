@@ -1,12 +1,12 @@
 #!/bin/bash
 
-# ===================== 命令行参数解析 =====================
-# 默认值配置（保持原有配置作为默认）
+# ===================== Command Line Argument Parsing =====================
+# Default value configuration (keep original configuration as default)
 DEFAULT_TENSOR_MODEL_PARALLEL_SIZE=8
 DEFAULT_N_GPUS_PER_NODE=8
 DEFAULT_MODEL_PATH="/home/Qwen3-8B"
 
-# 显示帮助信息
+# Display help information
 show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo "VERL Training Script with Configurable Parameters"
@@ -31,7 +31,7 @@ show_help() {
     echo "  $0 --tp-size 2 --gpus-per-node 2 --model-path /home/Qwen3-72B"
 }
 
-# 解析命令行参数
+# Parse command line arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
@@ -58,12 +58,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 设置默认值（如果未通过命令行指定）
+# Set default values (if not specified via command line)
 TENSOR_MODEL_PARALLEL_SIZE=${TENSOR_MODEL_PARALLEL_SIZE:-$DEFAULT_TENSOR_MODEL_PARALLEL_SIZE}
 N_GPUS_PER_NODE=${N_GPUS_PER_NODE:-$DEFAULT_N_GPUS_PER_NODE}
 MODEL_PATH=${MODEL_PATH:-$DEFAULT_MODEL_PATH}
 
-# ===================== 环境配置 =====================
+# ===================== Environment Configuration =====================
 CURR_DIR=$(dirname $(realpath $0))
 export SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK=True
 export PYTHONPATH=/home/nanhu/nanhu-verl/:/home/nanhu/nanhu-sglang/:$PYTHONPATH
@@ -74,7 +74,7 @@ export LOG_LEVEL=DEBUG
 export TRANSFORMERS_NO_FLASH_ATTENTION=1
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:False,max_split_size_mb:512"
 
-# 打印配置信息（方便调试）
+# Print configuration information (for debugging convenience)
 echo "========================================"
 echo "VERL Training Configuration"
 echo "========================================"
@@ -84,7 +84,7 @@ echo "Model Path: $MODEL_PATH"
 echo "========================================"
 echo ""
 
-# ===================== 启动训练 =====================
+# ===================== Start Training =====================
 PYTHONUNBUFFERED=1 SGLANG_LOG_LEVEL=DEBUG LOG_LEVEL=DEBUG SGLANG_LOG_VERBOSE=1 python3 -m verl.trainer.main_ppo \
     data.train_files=/home/gsm8k/train.parquet \
     data.val_files=/home/gsm8k/test.parquet \
