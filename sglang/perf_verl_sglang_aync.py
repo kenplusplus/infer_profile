@@ -14,7 +14,7 @@ from sglang.srt.server_args import ServerArgs
 # Test root directory
 ROOT_OUTPUT_DIR = "./results/sglang_perf_test_async/"
 # Performance test parameters (async batch test parameters) - set as default values, actual values are overridden by command line arguments
-PROMPT_LENGTH = 512             # Input prompt length (number of tokens), not exposed to command line configuration temporarily
+PROMPT_LENGTH = 1024             # Input prompt length (number of tokens), not exposed to command line configuration temporarily
 
 # Create root directory
 os.makedirs(ROOT_OUTPUT_DIR, exist_ok=True)
