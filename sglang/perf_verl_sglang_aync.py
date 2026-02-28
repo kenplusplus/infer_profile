@@ -309,6 +309,7 @@ def build_runtime_configs(model_path, micro_batch_size, tp_size):
     optimized_config.num_continuous_decode_steps = 4   # Optimization: Increase continuous decode steps
     optimized_config.disable_cuda_graph = False        # Optimization: Enable CUDA Graph
     optimized_config.disable_custom_all_reduce = False
+    optimized_config.enable_single_batch_overlap = True
 
     return {
         "original": original_config,
